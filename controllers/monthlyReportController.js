@@ -73,13 +73,16 @@ exports.getMonthlyReport = async (req, res) => {
     ==================================================
     */
 
-    const stockBalance = await StockBalance.findOne({
-
-      month,
-
-      year
-
-    });
+    const stockBalance =
+      (await StockBalance.findOne({
+        month,
+        year,
+        status: "OPEN",
+      })) ||
+      (await StockBalance.findOne({
+        month,
+        year,
+      }));
 
     const openingWeight = stockBalance
       ? Number(stockBalance.openingNetWeight || 0)
@@ -497,11 +500,20 @@ exports.closeMonth = async (req, res) => {
     // Find Current Month
     // ============================
 
-    const stockBalance =
+    let stockBalance =
       await StockBalance.findOne({
         month,
         year,
+        status: "OPEN",
       });
+
+    if (!stockBalance) {
+      stockBalance =
+        await StockBalance.findOne({
+          month,
+          year,
+        });
+    }
 
     if (!stockBalance) {
 
@@ -607,6 +619,14 @@ exports.closeMonth = async (req, res) => {
         status: "OPEN",
 
       });
+
+    } else {
+
+      nextMonthBalance.openingNetWeight = closingWeight;
+
+      nextMonthBalance.openingBags = closingBags;
+
+      await nextMonthBalance.save();
 
     }
 
