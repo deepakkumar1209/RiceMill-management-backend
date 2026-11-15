@@ -17,6 +17,11 @@ const stockBalanceSchema = new mongoose.Schema(
         required:true
     },
 
+    variety:{
+        type:String,
+        default:"A"
+    },
+
     openingNetWeight:{
         type:Number,
         default:0

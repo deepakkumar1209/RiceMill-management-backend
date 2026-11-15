@@ -10,35 +10,27 @@ Monthly Report
 */
 
 exports.getMonthlyReport = async (req, res) => {
-
   try {
-
     const { fromDate, toDate } = req.query;
 
     const from = new Date(fromDate);
+    from.setHours(0, 0, 0, 0);
 
     const to = new Date(toDate);
+    to.setHours(23, 59, 59, 999);
 
     /*
     ==================================================
     Get Inward Transactions
     ==================================================
     */
-
     const inwards = await Inward.find({
-
       issueDate: {
-
         $gte: from,
-
-        $lte: to
-
-      }
-
+        $lte: to,
+      },
     }).sort({
-
-      issueDate: 1
-
+      issueDate: 1,
     });
 
     /*
@@ -46,34 +38,372 @@ exports.getMonthlyReport = async (req, res) => {
     Get Outward Transactions
     ==================================================
     */
-
     const outwards = await Outward.find({
-
       issueDate: {
-
         $gte: from,
-
-        $lte: to
-
-      }
-
+        $lte: to,
+      },
     }).sort({
-
-      issueDate: 1
-
+      issueDate: 1,
     });
 
     const month = from.getMonth() + 1;
-
     const year = from.getFullYear();
 
     /*
     ==================================================
-    Opening Balance
+    Helper Function: Rice -> Paddy Equivalent
     ==================================================
     */
+    const calculatePaddyEquivalent = (riceWeight, outturn) => {
+      const rice = Number(riceWeight || 0);
+      const percentage = Number(outturn || 0);
+      if (percentage <= 0) return rice;
+      return Number(((rice * 100) / percentage).toFixed(2));
+    };
 
-    const stockBalance =
+    /*
+    ==================================================
+    Convert Inward Transactions
+    ==================================================
+    */
+    const inwardTransactions = inwards.map((row) => ({
+      type: "INWARD",
+      issueDate: row.issueDate,
+      issueNumber: row.issueMemoNo || "-",
+      acknowledgeDate: row.acknowledgeDate,
+      acknowledgeNumber: row.acknowledgeNumber || "-",
+      item: row.item,
+      variety: row.variety || "A",
+      inwardWeight: Number(row.totalNetWeight ?? row.netWeight ?? 0),
+      outwardWeight: 0,
+      inwardBags: Number(row.totalNoOfBags || 0),
+      outwardBags: 0,
+      paddyWeight: Number(row.totalNetWeight ?? row.netWeight ?? 0),
+      outturn: Number(row.riceOutturn || 0),
+      riceDue: Number(row.totalRiceDue || 0),
+    }));
+
+    /*
+    ==================================================
+    Convert Outward Transactions
+    ==================================================
+    */
+    const outwardTransactions = await Promise.all(
+      outwards.map(async (row) => {
+        const item = await Item.findOne({
+          itemName: row.item,
+        });
+
+        const outturn = Number(item?.outlet || 100);
+        const rawWeight = Number(row.totalNetWeight ?? row.netWeight ?? 0);
+        const paddyEquivalent = calculatePaddyEquivalent(
+          rawWeight,
+          outturn
+        );
+
+        return {
+          type: "OUTWARD",
+          issueDate: row.issueDate,
+          issueNumber: row.issueNumber || "-",
+          acknowledgeDate: row.acknowledgeDate,
+          acknowledgeNumber: row.acknowledgeNumber || "-",
+          item: row.item,
+          variety: row.variety || "A",
+          inwardWeight: 0,
+          outwardWeight: paddyEquivalent,
+          rawOutwardWeight: rawWeight,
+          inwardBags: 0,
+          outwardBags: Number(row.totalNoOfBags || 0),
+          outturn,
+          balanceRiceDue: Number(row.balanceRiceDue || 0),
+        };
+      })
+    );
+
+    /*
+    ==================================================
+    Merge and Sort Transactions
+    ==================================================
+    */
+    const transactions = [
+      ...inwardTransactions,
+      ...outwardTransactions,
+    ].sort(
+      (a, b) => new Date(a.issueDate) - new Date(b.issueDate)
+    );
+
+    /*
+    ==================================================
+    Fetch Stock Balances for Month
+    ==================================================
+    */
+    const stockBalances = await StockBalance.find({
+      month,
+      year,
+    });
+
+    /*
+    ==================================================
+    Build Item & Variety Wise Breakdown
+    ==================================================
+    */
+    const itemVarietyMap = new Map();
+    const getMapKey = (it, vr) => `${it}__${vr || "A"}`;
+
+    // Seed registered items
+    const allItems = await Item.find();
+    for (const it of allItems) {
+      for (const v of ["A", "C"]) {
+        const key = getMapKey(it.itemName, v);
+        itemVarietyMap.set(key, {
+          item: it.itemName,
+          variety: v,
+          openingWeight: 0,
+          openingBags: 0,
+          inwardCount: 0,
+          inwardWeight: 0,
+          inwardBags: 0,
+          outwardCount: 0,
+          outwardWeight: 0,
+          rawOutwardWeight: 0,
+          outwardBags: 0,
+          closingWeight: 0,
+          closingBags: 0,
+        });
+      }
+    }
+
+    // Populate Opening Balances from StockBalance
+    for (const sb of stockBalances) {
+      const v = sb.variety || "A";
+      const key = getMapKey(sb.item, v);
+      if (!itemVarietyMap.has(key)) {
+        itemVarietyMap.set(key, {
+          item: sb.item,
+          variety: v,
+          openingWeight: 0,
+          openingBags: 0,
+          inwardCount: 0,
+          inwardWeight: 0,
+          inwardBags: 0,
+          outwardCount: 0,
+          outwardWeight: 0,
+          rawOutwardWeight: 0,
+          outwardBags: 0,
+          closingWeight: 0,
+          closingBags: 0,
+        });
+      }
+      const entry = itemVarietyMap.get(key);
+      entry.openingWeight += Number(sb.openingNetWeight || 0);
+      entry.openingBags += Number(sb.openingBags || 0);
+    }
+
+    // Aggregate Inwards
+    for (const tx of inwardTransactions) {
+      const key = getMapKey(tx.item, tx.variety);
+      if (!itemVarietyMap.has(key)) {
+        itemVarietyMap.set(key, {
+          item: tx.item,
+          variety: tx.variety,
+          openingWeight: 0,
+          openingBags: 0,
+          inwardCount: 0,
+          inwardWeight: 0,
+          inwardBags: 0,
+          outwardCount: 0,
+          outwardWeight: 0,
+          rawOutwardWeight: 0,
+          outwardBags: 0,
+          closingWeight: 0,
+          closingBags: 0,
+        });
+      }
+      const entry = itemVarietyMap.get(key);
+      entry.inwardCount += 1;
+      entry.inwardWeight += tx.inwardWeight;
+      entry.inwardBags += tx.inwardBags;
+    }
+
+    // Aggregate Outwards
+    for (const tx of outwardTransactions) {
+      const key = getMapKey(tx.item, tx.variety);
+      if (!itemVarietyMap.has(key)) {
+        itemVarietyMap.set(key, {
+          item: tx.item,
+          variety: tx.variety,
+          openingWeight: 0,
+          openingBags: 0,
+          inwardCount: 0,
+          inwardWeight: 0,
+          inwardBags: 0,
+          outwardCount: 0,
+          outwardWeight: 0,
+          rawOutwardWeight: 0,
+          outwardBags: 0,
+          closingWeight: 0,
+          closingBags: 0,
+        });
+      }
+      const entry = itemVarietyMap.get(key);
+      entry.outwardCount += 1;
+      entry.outwardWeight += tx.outwardWeight;
+      entry.rawOutwardWeight += tx.rawOutwardWeight || tx.outwardWeight;
+      entry.outwardBags += tx.outwardBags;
+    }
+
+    // Calculate closing balance and round numbers
+    const breakdown = Array.from(itemVarietyMap.values())
+      .map((entry) => {
+        entry.closingWeight = Number(
+          (entry.openingWeight + entry.inwardWeight - entry.outwardWeight).toFixed(2)
+        );
+        entry.closingBags = Number(
+          (entry.openingBags + entry.inwardBags - entry.outwardBags).toFixed(2)
+        );
+        entry.inwardWeight = Number(entry.inwardWeight.toFixed(2));
+        entry.outwardWeight = Number(entry.outwardWeight.toFixed(2));
+        entry.rawOutwardWeight = Number(entry.rawOutwardWeight.toFixed(2));
+        entry.openingWeight = Number(entry.openingWeight.toFixed(2));
+        entry.openingBags = Number(entry.openingBags.toFixed(2));
+        return entry;
+      })
+      .filter((entry) => {
+        // Keep rows that have opening, activity, or are default Variety A for registered items
+        return (
+          entry.openingWeight !== 0 ||
+          entry.openingBags !== 0 ||
+          entry.inwardCount !== 0 ||
+          entry.outwardCount !== 0 ||
+          entry.variety === "A"
+        );
+      });
+
+    /*
+    ==================================================
+    Overall Totals
+    ==================================================
+    */
+    const totalOpeningWeight = breakdown.reduce((sum, b) => sum + b.openingWeight, 0);
+    const totalOpeningBags = breakdown.reduce((sum, b) => sum + b.openingBags, 0);
+    const totalInwardWeight = breakdown.reduce((sum, b) => sum + b.inwardWeight, 0);
+    const totalInwardBags = breakdown.reduce((sum, b) => sum + b.inwardBags, 0);
+    const totalInwardCount = breakdown.reduce((sum, b) => sum + b.inwardCount, 0);
+    const totalOutwardWeight = breakdown.reduce((sum, b) => sum + b.outwardWeight, 0);
+    const totalOutwardBags = breakdown.reduce((sum, b) => sum + b.outwardBags, 0);
+    const totalOutwardCount = breakdown.reduce((sum, b) => sum + b.outwardCount, 0);
+    const closingWeight = totalOpeningWeight + totalInwardWeight - totalOutwardWeight;
+    const closingBags = totalOpeningBags + totalInwardBags - totalOutwardBags;
+
+    res.json({
+      month,
+      year,
+      opening: {
+        weight: Number(totalOpeningWeight.toFixed(2)),
+        bags: Number(totalOpeningBags.toFixed(2)),
+      },
+      transactions,
+      breakdown,
+      summary: {
+        totalInwardWeight: Number(totalInwardWeight.toFixed(2)),
+        totalOutwardWeight: Number(totalOutwardWeight.toFixed(2)),
+        totalInwardBags: Number(totalInwardBags.toFixed(2)),
+        totalOutwardBags: Number(totalOutwardBags.toFixed(2)),
+        totalInwardCount,
+        totalOutwardCount,
+        closingWeight: Number(closingWeight.toFixed(2)),
+        closingBags: Number(closingBags.toFixed(2)),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+// ===========================================
+// Close Month
+// ===========================================
+
+exports.closeMonth = async (req, res) => {
+  try {
+    const {
+      month,
+      year,
+      closingWeight,
+      closingBags,
+      breakdown,
+    } = req.body;
+
+    let nextMonth = month + 1;
+    let nextYear = year;
+    if (nextMonth > 12) {
+      nextMonth = 1;
+      nextYear++;
+    }
+
+    if (Array.isArray(breakdown) && breakdown.length > 0) {
+      for (const row of breakdown) {
+        let sb = await StockBalance.findOne({
+          month,
+          year,
+          item: row.item,
+          variety: row.variety || "A",
+        });
+
+        if (!sb) {
+          sb = await StockBalance.findOne({
+            month,
+            year,
+            item: row.item,
+          });
+        }
+
+        if (sb) {
+          sb.closingNetWeight = row.closingWeight;
+          sb.closingBags = row.closingBags;
+          sb.status = "CLOSED";
+          await sb.save();
+        }
+
+        let nextSb = await StockBalance.findOne({
+          month: nextMonth,
+          year: nextYear,
+          item: row.item,
+          variety: row.variety || "A",
+        });
+
+        if (!nextSb) {
+          await StockBalance.create({
+            month: nextMonth,
+            year: nextYear,
+            item: row.item,
+            variety: row.variety || "A",
+            openingNetWeight: row.closingWeight,
+            openingBags: row.closingBags,
+            inwardNetWeight: 0,
+            inwardBags: 0,
+            outwardNetWeight: 0,
+            outwardBags: 0,
+            closingNetWeight: row.closingWeight,
+            closingBags: row.closingBags,
+            status: "OPEN",
+          });
+        } else {
+          nextSb.openingNetWeight = row.closingWeight;
+          nextSb.openingBags = row.closingBags;
+          await nextSb.save();
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Month closed successfully for all items and varieties.",
+      });
+    }
+
+    let stockBalance =
       (await StockBalance.findOne({
         month,
         year,
@@ -84,576 +414,62 @@ exports.getMonthlyReport = async (req, res) => {
         year,
       }));
 
-    const openingWeight = stockBalance
-      ? Number(stockBalance.openingNetWeight || 0)
-      : 0;
-
-    const openingRiceDue = stockBalance
-      ? Number(stockBalance.openingRiceDue || 0)
-      : 0;
-
-    const openingBags = stockBalance
-      ? Number(stockBalance.openingBags || 0)
-      : 0;
-
-    /*
-/*
-==================================================
-Helper Function
-Rice -> Paddy Equivalent
-==================================================
-*/
-
-const calculatePaddyEquivalent = (riceWeight, outturn) => {
-
-  const rice = Number(riceWeight || 0);
-
-  const percentage = Number(outturn || 0);
-
-  if (percentage <= 0) {
-
-    return 0;
-
-  }
-
-  return Number(
-
-    ((rice * 100) / percentage).toFixed(2)
-
-  );
-
-};
-/*
-==================================================
-Convert Inward Transactions
-(Paddy Received)
-==================================================
-*/
-
-const inwardTransactions = inwards.map((row) => {
-
-  return {
-
-    type: "INWARD",
-
-    issueDate: row.issueDate,
-
-    issueNumber: row.issueMemoNo,
-
-    acknowledgeDate: row.acknowledgeDate,
-
-    acknowledgeNumber: row.acknowledgeNumber,
-
-    item: row.item,
-
-    /*
-    Store Paddy Weight
-    */
-
-    inwardWeight: Number(
-
-      row.totalNetWeight || 0
-
-    ),
-
-    outwardWeight: 0,
-
-    inwardBags: Number(
-
-      row.totalNoOfBags || 0
-
-    ),
-
-    outwardBags: 0,
-
-    /*
-    Extra Information
-    */
-
-    paddyWeight: Number(
-
-      row.totalNetWeight || 0
-
-    ),
-
-    outturn: Number(
-
-      row.riceOutturn || 0
-
-    )
-
-  };
-
-});
- /*
-==================================================
-Convert Outward Transactions
-(Rice Issued -> Paddy Equivalent)
-==================================================
-*/
-
-const outwardTransactions = await Promise.all(
-
-  outwards.map(async (row) => {
-
-    const item = await Item.findOne({
-
-      itemName: row.item
-
-    });
-
-    const outturn = Number(
-
-      item?.outlet || 0
-
-    );
-
-    const paddyEquivalent = calculatePaddyEquivalent(
-
-      row.totalNetWeight,
-
-      outturn
-
-    );
-
-    return {
-
-      type: "OUTWARD",
-
-      issueDate: row.issueDate,
-
-      issueNumber: row.issueNumber,
-
-      acknowledgeDate: row.acknowledgeDate,
-
-      acknowledgeNumber: row.acknowledgeNumber,
-
-      item: row.item,
-
-      inwardWeight: 0,
-
-      /*
-      Paddy Deducted
-      */
-
-      outwardWeight: paddyEquivalent,
-
-      inwardBags: 0,
-
-      outwardBags: Number(
-
-        row.totalNoOfBags || 0
-
-      ),
-
-      outturn
-
-    };
-
-  })
-
-);
-
-    // ==========================
-    // Merge Transactions
-    // ==========================
-
-    const transactions = [
-      ...inwardTransactions,
-      ...outwardTransactions,
-    ];
-
-    transactions.sort(
-      (a, b) =>
-        new Date(a.issueDate) -
-        new Date(b.issueDate)
-    );
-
-    // ==========================
-    // Totals
-    // ==========================
-/*
-==================================================
-Totals
-==================================================
-*/
-
-/*
---------------------------------------------------
-Total Paddy Received
---------------------------------------------------
-*/
-
-const totalInwardWeight = inwards.reduce(
-
-  (sum, row) =>
-
-    sum +
-
-    Number(row.totalNetWeight || 0),
-
-  0
-
-);
-
-/*
---------------------------------------------------
-Total Paddy Issued
-(Rice -> Paddy Equivalent)
---------------------------------------------------
-*/
-
-let totalOutwardWeight = 0;
-
-for (const row of outwards) {
-
-  const item = await Item.findOne({
-
-    itemName: row.item
-
-  });
-
-  const outturn = Number(
-
-    item?.outlet || 0
-
-  );
-
-  const paddyEquivalent = calculatePaddyEquivalent(
-
-    row.totalNetWeight,
-
-    outturn
-
-  );
-
-  totalOutwardWeight += paddyEquivalent;
-
-}
-
-/*
---------------------------------------------------
-Rice Due
---------------------------------------------------
-*/
-
-const totalInwardRiceDue = inwards.reduce(
-
-  (sum, row) =>
-
-    sum +
-
-    Number(row.totalRiceDue || 0),
-
-  0
-
-);
-
-const totalOutwardRiceDue = outwards.reduce(
-
-  (sum, row) =>
-
-    sum +
-
-    Number(row.balanceRiceDue || 0),
-
-  0
-
-);
-
-/*
---------------------------------------------------
-Bags
---------------------------------------------------
-*/
-
-const totalInwardBags = inwards.reduce(
-
-  (sum, row) =>
-
-    sum +
-
-    Number(row.totalNoOfBags || 0),
-
-  0
-
-);
-
-const totalOutwardBags = outwards.reduce(
-
-  (sum, row) =>
-
-    sum +
-
-    Number(row.totalNoOfBags || 0),
-
-  0
-
-);
-
-/*
-==================================================
-Closing Balance
-==================================================
-*/
-
-const closingWeight =
-
-  openingWeight +
-
-  totalInwardWeight -
-
-  totalOutwardWeight;
-
-const closingRiceDue =
-
-  openingRiceDue +
-
-  totalInwardRiceDue -
-
-  totalOutwardRiceDue;
-
-const closingBags =
-
-  openingBags +
-
-  totalInwardBags -
-
-  totalOutwardBags;
-
-    // ==========================
-    // Response
-    // ==========================
-/*
-==================================================
-Response
-==================================================
-*/
-
-res.json({
-
-  month,
-
-  year,
-
-  opening: {
-
-    weight: Number(openingWeight.toFixed(2)),
-
-    bags: Number(openingBags.toFixed(2))
-
-  },
-
-  transactions,
-summary: {
-
-  totalInwardWeight: Number(totalInwardWeight.toFixed(2)),
-
-  totalOutwardWeight: Number(totalOutwardWeight.toFixed(2)),
-
-  totalInwardBags: Number(totalInwardBags.toFixed(2)),
-
-  totalOutwardBags: Number(totalOutwardBags.toFixed(2)),
-
-  closingWeight: Number(closingWeight.toFixed(2)),
-
-  closingBags: Number(closingBags.toFixed(2))
-
-}
-
-});
-
-}
-
-catch (error) {
-
-  res.status(500).json({
-
-    message: error.message
-
-  });
-
-}
-
-};
-// ===========================================
-// Close Month
-// ===========================================
-
-exports.closeMonth = async (req, res) => {
-
-  try {
-
- const {
-
-  month,
-
-  year,
-
-  closingWeight,
-
-  closingBags,
-
-} = req.body;
-
-    // ============================
-    // Find Current Month
-    // ============================
-
-    let stockBalance =
-      await StockBalance.findOne({
-        month,
-        year,
-        status: "OPEN",
-      });
-
     if (!stockBalance) {
-      stockBalance =
-        await StockBalance.findOne({
-          month,
-          year,
-        });
-    }
-
-    if (!stockBalance) {
-
       return res.status(404).json({
         success: false,
         message: "Opening balance not found for this month.",
       });
-
     }
 
-    // ============================
-    // Already Closed?
-    // ============================
-
     if (stockBalance.status === "CLOSED") {
-
       return res.status(400).json({
         success: false,
         message: "This month is already closed.",
       });
-
     }
-
-    // ============================
-    // Save Closing Balance
-    // ============================
 
     stockBalance.closingNetWeight = closingWeight;
-
     stockBalance.closingBags = closingBags;
-
     stockBalance.status = "CLOSED";
-
     await stockBalance.save();
-
-    // ============================
-    // Calculate Next Month
-    // ============================
-
-    let nextMonth = month + 1;
-
-    let nextYear = year;
-
-    if (nextMonth > 12) {
-
-      nextMonth = 1;
-
-      nextYear++;
-
-    }
-
-    // ============================
-    // Check Next Month Exists
-    // ============================
 
     const nextMonthBalance =
       await StockBalance.findOne({
-
         month: nextMonth,
-
         year: nextYear,
-
         item: stockBalance.item,
-
       });
-
-    // ============================
-    // Create Next Month Opening
-    // ============================
 
     if (!nextMonthBalance) {
-
       await StockBalance.create({
-
         month: nextMonth,
-
         year: nextYear,
-
         item: stockBalance.item,
-
+        variety: stockBalance.variety || "A",
         openingNetWeight: closingWeight,
-
-       
-
         openingBags: closingBags,
-
         inwardNetWeight: 0,
-
-
         inwardBags: 0,
-
         outwardNetWeight: 0,
-
-        
-
         outwardBags: 0,
-
         closingNetWeight: closingWeight,
-
-
         closingBags: closingBags,
-
         status: "OPEN",
-
       });
-
     } else {
-
       nextMonthBalance.openingNetWeight = closingWeight;
-
       nextMonthBalance.openingBags = closingBags;
-
       await nextMonthBalance.save();
-
     }
 
-    // ============================
-    // Response
-    // ============================
-
     res.status(200).json({
-
       success: true,
-
       message: "Month closed successfully.",
-
     });
-
-  }
-
-  catch (error) {
-
+  } catch (error) {
     res.status(500).json({
-
       success: false,
-
       message: error.message,
-
     });
-
   }
-
 };
