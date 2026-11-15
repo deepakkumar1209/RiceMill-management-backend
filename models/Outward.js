@@ -20,6 +20,11 @@ const outwardSchema = new mongoose.Schema(
 
     lorryNo:String,
 
+    variety: {
+        type: String,
+        default: "A",
+    },
+
     placeOfDeposit:String,
 
     sampleNo:String,
@@ -35,6 +40,11 @@ const outwardSchema = new mongoose.Schema(
     ssg:Number,
 
     swp:Number,
+
+    usb: {
+        type: Number,
+        default: 0,
+    },
 
     noOfBags:Number,
 

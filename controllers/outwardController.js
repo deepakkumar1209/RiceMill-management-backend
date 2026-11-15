@@ -1,4 +1,5 @@
 const Outward = require("../models/Outward");
+const Item = require("../models/Item");
 const {
     addOutward
 } = require("../services/inventoryService");
@@ -7,6 +8,39 @@ const {
 exports.createOutward=async(req,res)=>{
 
 try{
+    const totalWeight = Number(
+      req.body.totalNetWeight ?? req.body.netWeight ?? 0
+    );
+    req.body.totalNetWeight = totalWeight;
+    req.body.netWeight = totalWeight;
+
+    // Calculate balanceRiceDue from item outlet if not provided
+    if (req.body.balanceRiceDue === undefined || req.body.balanceRiceDue === null || req.body.balanceRiceDue === "") {
+      let outturn = 100;
+      if (req.body.item) {
+        const item = await Item.findOne({ itemName: req.body.item });
+        if (item && item.outlet) {
+          outturn = Number(item.outlet);
+        }
+      }
+      req.body.balanceRiceDue = Number(((totalWeight * outturn) / 100).toFixed(2));
+    } else {
+      req.body.balanceRiceDue = Number(req.body.balanceRiceDue || 0);
+    }
+
+    const totalBags =
+      Number(req.body.onbg || 0) +
+      Number(req.body.ssg || 0) +
+      Number(req.body.swp || 0) +
+      Number(req.body.usb || 0);
+
+    req.body.noOfBags = totalBags;
+    req.body.totalNoOfBags = totalBags;
+    req.body.balanceNoOfBags = totalBags;
+
+    if (!req.body.variety) {
+      req.body.variety = "A";
+    }
 
 const outward=
 
@@ -76,6 +110,42 @@ exports.getOutward = async (req, res) => {
 // ===============================
 exports.updateOutward = async (req, res) => {
   try {
+    if (req.body.totalNetWeight !== undefined || req.body.netWeight !== undefined) {
+      const totalWeight = Number(
+        req.body.totalNetWeight ?? req.body.netWeight ?? 0
+      );
+      req.body.totalNetWeight = totalWeight;
+      req.body.netWeight = totalWeight;
+
+      if (req.body.balanceRiceDue === undefined || req.body.balanceRiceDue === null || req.body.balanceRiceDue === "") {
+        let outturn = 100;
+        if (req.body.item) {
+          const item = await Item.findOne({ itemName: req.body.item });
+          if (item && item.outlet) {
+            outturn = Number(item.outlet);
+          }
+        }
+        req.body.balanceRiceDue = Number(((totalWeight * outturn) / 100).toFixed(2));
+      }
+    }
+
+    if (
+      req.body.onbg !== undefined ||
+      req.body.ssg !== undefined ||
+      req.body.swp !== undefined ||
+      req.body.usb !== undefined
+    ) {
+      const totalBags =
+        Number(req.body.onbg || 0) +
+        Number(req.body.ssg || 0) +
+        Number(req.body.swp || 0) +
+        Number(req.body.usb || 0);
+
+      req.body.noOfBags = totalBags;
+      req.body.totalNoOfBags = totalBags;
+      req.body.balanceNoOfBags = totalBags;
+    }
+
     const outward =
       await Outward.findByIdAndUpdate(
         req.params.id,
