@@ -151,8 +151,10 @@ exports.getMonthlyReport = async (req, res) => {
     const itemVarietyMap = new Map();
     const getMapKey = (it, vr) => `${it}__${vr || "A"}`;
 
-    // Seed registered items
+    // Strictly seed from Item Master: each valid item with Variety A and Variety C
     const allItems = await Item.find();
+    const validItemNames = new Set(allItems.map((i) => i.itemName));
+
     for (const it of allItems) {
       for (const v of ["A", "C"]) {
         const key = getMapKey(it.itemName, v);
@@ -174,87 +176,46 @@ exports.getMonthlyReport = async (req, res) => {
       }
     }
 
-    // Populate Opening Balances from StockBalance
+    // Populate Opening Balances from StockBalance (only for valid Item Master items)
     for (const sb of stockBalances) {
+      if (!validItemNames.has(sb.item)) continue;
       const v = sb.variety || "A";
       const key = getMapKey(sb.item, v);
-      if (!itemVarietyMap.has(key)) {
-        itemVarietyMap.set(key, {
-          item: sb.item,
-          variety: v,
-          openingWeight: 0,
-          openingBags: 0,
-          inwardCount: 0,
-          inwardWeight: 0,
-          inwardBags: 0,
-          outwardCount: 0,
-          outwardWeight: 0,
-          rawOutwardWeight: 0,
-          outwardBags: 0,
-          closingWeight: 0,
-          closingBags: 0,
-        });
+      if (itemVarietyMap.has(key)) {
+        const entry = itemVarietyMap.get(key);
+        entry.openingWeight += Number(sb.openingNetWeight || 0);
+        entry.openingBags += Number(sb.openingBags || 0);
       }
-      const entry = itemVarietyMap.get(key);
-      entry.openingWeight += Number(sb.openingNetWeight || 0);
-      entry.openingBags += Number(sb.openingBags || 0);
     }
 
-    // Aggregate Inwards
+    // Aggregate Inwards (only for valid Item Master items)
     for (const tx of inwardTransactions) {
+      if (!validItemNames.has(tx.item)) continue;
       const key = getMapKey(tx.item, tx.variety);
-      if (!itemVarietyMap.has(key)) {
-        itemVarietyMap.set(key, {
-          item: tx.item,
-          variety: tx.variety,
-          openingWeight: 0,
-          openingBags: 0,
-          inwardCount: 0,
-          inwardWeight: 0,
-          inwardBags: 0,
-          outwardCount: 0,
-          outwardWeight: 0,
-          rawOutwardWeight: 0,
-          outwardBags: 0,
-          closingWeight: 0,
-          closingBags: 0,
-        });
+      if (itemVarietyMap.has(key)) {
+        const entry = itemVarietyMap.get(key);
+        entry.inwardCount += 1;
+        entry.inwardWeight += tx.inwardWeight;
+        entry.inwardBags += tx.inwardBags;
       }
-      const entry = itemVarietyMap.get(key);
-      entry.inwardCount += 1;
-      entry.inwardWeight += tx.inwardWeight;
-      entry.inwardBags += tx.inwardBags;
     }
 
-    // Aggregate Outwards
+    // Aggregate Outwards (only for valid Item Master items)
     for (const tx of outwardTransactions) {
+      if (!validItemNames.has(tx.item)) continue;
       const key = getMapKey(tx.item, tx.variety);
-      if (!itemVarietyMap.has(key)) {
-        itemVarietyMap.set(key, {
-          item: tx.item,
-          variety: tx.variety,
-          openingWeight: 0,
-          openingBags: 0,
-          inwardCount: 0,
-          inwardWeight: 0,
-          inwardBags: 0,
-          outwardCount: 0,
-          outwardWeight: 0,
-          rawOutwardWeight: 0,
-          outwardBags: 0,
-          closingWeight: 0,
-          closingBags: 0,
-        });
+      if (itemVarietyMap.has(key)) {
+        const entry = itemVarietyMap.get(key);
+        entry.outwardCount += 1;
+        entry.outwardWeight += tx.outwardWeight;
+        entry.rawOutwardWeight += tx.rawOutwardWeight || tx.outwardWeight;
+        entry.outwardBags += tx.outwardBags;
       }
-      const entry = itemVarietyMap.get(key);
-      entry.outwardCount += 1;
-      entry.outwardWeight += tx.outwardWeight;
-      entry.rawOutwardWeight += tx.rawOutwardWeight || tx.outwardWeight;
-      entry.outwardBags += tx.outwardBags;
     }
 
-    // Calculate closing balance and round numbers
+    // Calculate closing balance and round numbers for all valid Item Master items
     const breakdown = Array.from(itemVarietyMap.values())
+      .filter((entry) => validItemNames.has(entry.item))
       .map((entry) => {
         entry.closingWeight = Number(
           (entry.openingWeight + entry.inwardWeight - entry.outwardWeight).toFixed(2)
@@ -268,16 +229,6 @@ exports.getMonthlyReport = async (req, res) => {
         entry.openingWeight = Number(entry.openingWeight.toFixed(2));
         entry.openingBags = Number(entry.openingBags.toFixed(2));
         return entry;
-      })
-      .filter((entry) => {
-        // Keep rows that have opening, activity, or are default Variety A for registered items
-        return (
-          entry.openingWeight !== 0 ||
-          entry.openingBags !== 0 ||
-          entry.inwardCount !== 0 ||
-          entry.outwardCount !== 0 ||
-          entry.variety === "A"
-        );
       });
 
     /*
