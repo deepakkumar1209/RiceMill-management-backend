@@ -11,13 +11,19 @@ Monthly Report
 
 exports.getMonthlyReport = async (req, res) => {
   try {
-    const { fromDate, toDate } = req.query;
+    let { fromDate, toDate } = req.query;
 
-    const from = new Date(fromDate);
-    from.setHours(0, 0, 0, 0);
-
-    const to = new Date(toDate);
-    to.setHours(23, 59, 59, 999);
+    let from, to;
+    if (fromDate && toDate) {
+      from = new Date(fromDate);
+      from.setHours(0, 0, 0, 0);
+      to = new Date(toDate);
+      to.setHours(23, 59, 59, 999);
+    } else {
+      const now = new Date();
+      from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    }
 
     /*
     ==================================================
@@ -82,6 +88,11 @@ exports.getMonthlyReport = async (req, res) => {
       paddyWeight: Number(row.totalNetWeight ?? row.netWeight ?? 0),
       outturn: Number(row.riceOutturn || 0),
       riceDue: Number(row.totalRiceDue || 0),
+      nbg: Number(row.nbg || 0),
+      onb: Number(row.onb || 0),
+      ssg: Number(row.ssg || 0),
+      swp: Number(row.swp || 0),
+      usb: Number(row.usb || 0),
     }));
 
     /*
@@ -117,6 +128,10 @@ exports.getMonthlyReport = async (req, res) => {
           outwardBags: Number(row.totalNoOfBags || 0),
           outturn,
           balanceRiceDue: Number(row.balanceRiceDue || 0),
+          onbg: Number(row.onbg || 0),
+          ssg: Number(row.ssg || 0),
+          swp: Number(row.swp || 0),
+          usb: Number(row.usb || 0),
         };
       })
     );
@@ -172,6 +187,12 @@ exports.getMonthlyReport = async (req, res) => {
           outwardBags: 0,
           closingWeight: 0,
           closingBags: 0,
+          nbg: 0,
+          onb: 0,
+          ssg: 0,
+          swp: 0,
+          usb: 0,
+          totalBags: 0,
         });
       }
     }
@@ -197,6 +218,11 @@ exports.getMonthlyReport = async (req, res) => {
         entry.inwardCount += 1;
         entry.inwardWeight += tx.inwardWeight;
         entry.inwardBags += tx.inwardBags;
+        entry.nbg += Number(tx.nbg || 0);
+        entry.onb += Number(tx.onb || 0);
+        entry.ssg += Number(tx.ssg || 0);
+        entry.swp += Number(tx.swp || 0);
+        entry.usb += Number(tx.usb || 0);
       }
     }
 
@@ -210,6 +236,10 @@ exports.getMonthlyReport = async (req, res) => {
         entry.outwardWeight += tx.outwardWeight;
         entry.rawOutwardWeight += tx.rawOutwardWeight || tx.outwardWeight;
         entry.outwardBags += tx.outwardBags;
+        entry.onb -= Number(tx.onbg || 0);
+        entry.ssg -= Number(tx.ssg || 0);
+        entry.swp -= Number(tx.swp || 0);
+        entry.usb -= Number(tx.usb || 0);
       }
     }
 
@@ -223,6 +253,7 @@ exports.getMonthlyReport = async (req, res) => {
         entry.closingBags = Number(
           (entry.openingBags + entry.inwardBags - entry.outwardBags).toFixed(2)
         );
+        entry.totalBags = entry.closingBags;
         entry.inwardWeight = Number(entry.inwardWeight.toFixed(2));
         entry.outwardWeight = Number(entry.outwardWeight.toFixed(2));
         entry.rawOutwardWeight = Number(entry.rawOutwardWeight.toFixed(2));
