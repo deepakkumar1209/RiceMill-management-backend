@@ -122,8 +122,9 @@ exports.getMonthlyReport = async (req, res) => {
           item: row.item,
           variety: row.variety || "A",
           inwardWeight: 0,
-          outwardWeight: paddyEquivalent,
+          outwardWeight: rawWeight, // Actual entered net weight (e.g. 200 Kg)
           rawOutwardWeight: rawWeight,
+          paddyEquivalentWeight: paddyEquivalent, // Paddy equivalent for backend balance reduction (e.g. 294.12 Kg)
           inwardBags: 0,
           outwardBags: Number(row.totalNoOfBags || 0),
           outturn,
@@ -184,6 +185,7 @@ exports.getMonthlyReport = async (req, res) => {
           outwardCount: 0,
           outwardWeight: 0,
           rawOutwardWeight: 0,
+          paddyEquivalent: 0,
           outwardBags: 0,
           closingWeight: 0,
           closingBags: 0,
@@ -235,6 +237,7 @@ exports.getMonthlyReport = async (req, res) => {
         entry.outwardCount += 1;
         entry.outwardWeight += tx.outwardWeight;
         entry.rawOutwardWeight += tx.rawOutwardWeight || tx.outwardWeight;
+        entry.paddyEquivalent += tx.paddyEquivalentWeight || tx.outwardWeight;
         entry.outwardBags += tx.outwardBags;
         entry.onb -= Number(tx.onbg || 0);
         entry.ssg -= Number(tx.ssg || 0);
@@ -247,8 +250,10 @@ exports.getMonthlyReport = async (req, res) => {
     const breakdown = Array.from(itemVarietyMap.values())
       .filter((entry) => validItemNames.has(entry.item))
       .map((entry) => {
+        // Closing balance reduces paddy equivalent in backend (e.g. 294.12)
+        const deduction = entry.paddyEquivalent > 0 ? entry.paddyEquivalent : entry.outwardWeight;
         entry.closingWeight = Number(
-          (entry.openingWeight + entry.inwardWeight - entry.outwardWeight).toFixed(2)
+          (entry.openingWeight + entry.inwardWeight - deduction).toFixed(2)
         );
         entry.closingBags = Number(
           (entry.openingBags + entry.inwardBags - entry.outwardBags).toFixed(2)
@@ -257,6 +262,7 @@ exports.getMonthlyReport = async (req, res) => {
         entry.inwardWeight = Number(entry.inwardWeight.toFixed(2));
         entry.outwardWeight = Number(entry.outwardWeight.toFixed(2));
         entry.rawOutwardWeight = Number(entry.rawOutwardWeight.toFixed(2));
+        entry.paddyEquivalent = Number((entry.paddyEquivalent || 0).toFixed(2));
         entry.openingWeight = Number(entry.openingWeight.toFixed(2));
         entry.openingBags = Number(entry.openingBags.toFixed(2));
         return entry;
@@ -367,11 +373,12 @@ exports.getMonthlyReport = async (req, res) => {
     const totalInwardWeight = breakdown.reduce((sum, b) => sum + b.inwardWeight, 0);
     const totalInwardBags = breakdown.reduce((sum, b) => sum + b.inwardBags, 0);
     const totalInwardCount = breakdown.reduce((sum, b) => sum + b.inwardCount, 0);
-    const totalOutwardWeight = breakdown.reduce((sum, b) => sum + b.outwardWeight, 0);
+    const totalOutwardWeight = breakdown.reduce((sum, b) => sum + b.outwardWeight, 0); // Actual entered net weight (e.g. 200 Kg)
     const totalOutwardBags = breakdown.reduce((sum, b) => sum + b.outwardBags, 0);
     const totalOutwardCount = breakdown.reduce((sum, b) => sum + b.outwardCount, 0);
-    const closingWeight = totalOpeningWeight + totalInwardWeight - totalOutwardWeight;
-    const closingBags = totalOpeningBags + totalInwardBags - totalOutwardBags;
+    // Closing weight correctly reflects opening + inward - paddy equivalents (e.g. 1000 - 294.12 = 705.88 Kg)
+    const closingWeight = breakdown.reduce((sum, b) => sum + b.closingWeight, 0);
+    const closingBags = breakdown.reduce((sum, b) => sum + b.closingBags, 0);
 
     res.json({
       month,
