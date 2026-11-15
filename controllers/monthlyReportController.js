@@ -151,12 +151,12 @@ exports.getMonthlyReport = async (req, res) => {
     const itemVarietyMap = new Map();
     const getMapKey = (it, vr) => `${it}__${vr || "A"}`;
 
-    // Strictly seed from Item Master: each valid item with Variety A and Variety C
+    // Strictly seed from Item Master: each valid item with Variety A, B, and C
     const allItems = await Item.find();
     const validItemNames = new Set(allItems.map((i) => i.itemName));
 
     for (const it of allItems) {
-      for (const v of ["A", "C"]) {
+      for (const v of ["A", "B", "C"]) {
         const key = getMapKey(it.itemName, v);
         itemVarietyMap.set(key, {
           item: it.itemName,
@@ -233,6 +233,101 @@ exports.getMonthlyReport = async (req, res) => {
 
     /*
     ==================================================
+    Specific Bag Counts Breakdown (Inward, Outward, Net)
+    ==================================================
+    */
+    const bagSummary = {
+      nbg: { name: "NBG", label: "New B Gunny", inward: 0, outward: 0, net: 0 },
+      onb: { name: "ONB / ONBG", label: "Once Used Gunny", inward: 0, outward: 0, net: 0 },
+      ssg: { name: "SSG", label: "Sound Small Gunny", inward: 0, outward: 0, net: 0 },
+      swp: { name: "SWP", label: "Sweepings / Patched", inward: 0, outward: 0, net: 0 },
+      usb: { name: "USB", label: "Used Sound Bag", inward: 0, outward: 0, net: 0 },
+      total: { name: "TOTAL BAGS", label: "Total All Bags", inward: 0, outward: 0, net: 0 },
+    };
+
+    for (const inRow of inwards) {
+      bagSummary.nbg.inward += Number(inRow.nbg || 0);
+      bagSummary.onb.inward += Number(inRow.onb || 0);
+      bagSummary.ssg.inward += Number(inRow.ssg || 0);
+      bagSummary.swp.inward += Number(inRow.swp || 0);
+      bagSummary.usb.inward += Number(inRow.usb || 0);
+      bagSummary.total.inward += Number(inRow.totalNoOfBags || 0);
+    }
+
+    for (const outRow of outwards) {
+      bagSummary.onb.outward += Number(outRow.onbg || 0);
+      bagSummary.ssg.outward += Number(outRow.ssg || 0);
+      bagSummary.swp.outward += Number(outRow.swp || 0);
+      bagSummary.usb.outward += Number(outRow.usb || 0);
+      bagSummary.total.outward += Number(outRow.totalNoOfBags || 0);
+    }
+
+    for (const key of Object.keys(bagSummary)) {
+      bagSummary[key].net = bagSummary[key].inward - bagSummary[key].outward;
+    }
+
+    /*
+    ==================================================
+    Variety-Wise Summary (Variety A, Variety B, Variety C, etc.)
+    ==================================================
+    */
+    const varietyMap = new Map();
+    for (const v of ["A", "B", "C"]) {
+      varietyMap.set(v, {
+        variety: v,
+        openingWeight: 0,
+        openingBags: 0,
+        inwardWeight: 0,
+        inwardBags: 0,
+        inwardCount: 0,
+        outwardWeight: 0,
+        outwardBags: 0,
+        outwardCount: 0,
+        closingWeight: 0,
+        closingBags: 0,
+      });
+    }
+
+    for (const b of breakdown) {
+      const v = b.variety || "A";
+      if (!varietyMap.has(v)) {
+        varietyMap.set(v, {
+          variety: v,
+          openingWeight: 0,
+          openingBags: 0,
+          inwardWeight: 0,
+          inwardBags: 0,
+          inwardCount: 0,
+          outwardWeight: 0,
+          outwardBags: 0,
+          outwardCount: 0,
+          closingWeight: 0,
+          closingBags: 0,
+        });
+      }
+      const vs = varietyMap.get(v);
+      vs.openingWeight += b.openingWeight;
+      vs.openingBags += b.openingBags;
+      vs.inwardWeight += b.inwardWeight;
+      vs.inwardBags += b.inwardBags;
+      vs.inwardCount += b.inwardCount;
+      vs.outwardWeight += b.outwardWeight;
+      vs.outwardBags += b.outwardBags;
+      vs.outwardCount += b.outwardCount;
+      vs.closingWeight += b.closingWeight;
+      vs.closingBags += b.closingBags;
+    }
+
+    const varietySummary = Array.from(varietyMap.values()).map((v) => ({
+      ...v,
+      openingWeight: Number(v.openingWeight.toFixed(2)),
+      inwardWeight: Number(v.inwardWeight.toFixed(2)),
+      outwardWeight: Number(v.outwardWeight.toFixed(2)),
+      closingWeight: Number(v.closingWeight.toFixed(2)),
+    }));
+
+    /*
+    ==================================================
     Overall Totals
     ==================================================
     */
@@ -256,6 +351,8 @@ exports.getMonthlyReport = async (req, res) => {
       },
       transactions,
       breakdown,
+      varietySummary,
+      bagSummary,
       summary: {
         totalInwardWeight: Number(totalInwardWeight.toFixed(2)),
         totalOutwardWeight: Number(totalOutwardWeight.toFixed(2)),
