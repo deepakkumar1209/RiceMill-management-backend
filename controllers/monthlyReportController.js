@@ -151,12 +151,12 @@ exports.getMonthlyReport = async (req, res) => {
     const itemVarietyMap = new Map();
     const getMapKey = (it, vr) => `${it}__${vr || "A"}`;
 
-    // Strictly seed from Item Master: each valid item with Variety A, B, and C
+    // Strictly seed from Item Master: each valid item with Variety A and Variety B (2 items x 2 varieties = 4 entries)
     const allItems = await Item.find();
     const validItemNames = new Set(allItems.map((i) => i.itemName));
 
     for (const it of allItems) {
-      for (const v of ["A", "B", "C"]) {
+      for (const v of ["A", "B"]) {
         const key = getMapKey(it.itemName, v);
         itemVarietyMap.set(key, {
           item: it.itemName,
@@ -268,11 +268,11 @@ exports.getMonthlyReport = async (req, res) => {
 
     /*
     ==================================================
-    Variety-Wise Summary (Variety A, Variety B, Variety C, etc.)
+    Variety-Wise Summary (Variety A & Variety B)
     ==================================================
     */
     const varietyMap = new Map();
-    for (const v of ["A", "B", "C"]) {
+    for (const v of ["A", "B"]) {
       varietyMap.set(v, {
         variety: v,
         openingWeight: 0,
