@@ -39,6 +39,11 @@ ssg:Number,
 
 swp:Number,
 
+usb:{
+    type:Number,
+    default:0
+},
+
 noOfBags:Number,
 
 totalNoOfBags:Number,
